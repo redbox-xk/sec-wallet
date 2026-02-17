@@ -1,9 +1,10 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import Image from "next/image"
 import { ethers } from "ethers"
 import { QRCodeSVG } from "qrcode.react"
+import useSWR from "swr"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -46,6 +47,13 @@ import {
   Fuel,
   Globe,
   KeyRound,
+  Lock,
+  Search,
+  TrendingUp,
+  TrendingDown,
+  Coins,
+  ShieldCheck,
+  Fingerprint,
 } from "lucide-react"
 
 // ---------------------------------------------------------------------------
@@ -53,15 +61,16 @@ import {
 // ---------------------------------------------------------------------------
 const NETWORKS: Record<
   string,
-  { name: string; rpc: string; chainId: number; symbol: string; explorer: string; decimals: number }
+  { name: string; rpc: string; chainId: number; symbol: string; explorer: string; decimals: number; coingeckoId: string }
 > = {
   mainnet: {
-    name: "Ethereum Mainnet",
+    name: "Ethereum",
     rpc: "https://eth.llamarpc.com",
     chainId: 1,
     symbol: "ETH",
     explorer: "https://etherscan.io",
     decimals: 18,
+    coingeckoId: "ethereum",
   },
   sepolia: {
     name: "Sepolia Testnet",
@@ -70,6 +79,7 @@ const NETWORKS: Record<
     symbol: "SepoliaETH",
     explorer: "https://sepolia.etherscan.io",
     decimals: 18,
+    coingeckoId: "ethereum",
   },
   polygon: {
     name: "Polygon",
@@ -78,6 +88,7 @@ const NETWORKS: Record<
     symbol: "MATIC",
     explorer: "https://polygonscan.com",
     decimals: 18,
+    coingeckoId: "matic-network",
   },
   bsc: {
     name: "BNB Smart Chain",
@@ -86,6 +97,7 @@ const NETWORKS: Record<
     symbol: "BNB",
     explorer: "https://bscscan.com",
     decimals: 18,
+    coingeckoId: "binancecoin",
   },
   arbitrum: {
     name: "Arbitrum One",
@@ -94,6 +106,7 @@ const NETWORKS: Record<
     symbol: "ETH",
     explorer: "https://arbiscan.io",
     decimals: 18,
+    coingeckoId: "ethereum",
   },
 }
 
@@ -110,6 +123,19 @@ interface TxRecord {
   network: string
 }
 
+interface CoinData {
+  id: string
+  symbol: string
+  name: string
+  image: string
+  current_price: number
+  price_change_percentage_24h: number
+  market_cap: number
+  market_cap_rank: number
+  total_volume: number
+  sparkline_in_7d?: { price: number[] }
+}
+
 type AppView = "onboarding" | "dashboard"
 
 // ---------------------------------------------------------------------------
@@ -124,7 +150,120 @@ function copyText(text: string) {
   navigator.clipboard.writeText(text)
 }
 
+function formatUsd(n: number) {
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`
+  if (n >= 1000) return `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+  if (n >= 1) return `$${n.toFixed(2)}`
+  return `$${n.toFixed(6)}`
+}
+
 const SEC_LOGO = "/sec-logo.jpeg"
+
+// ---------------------------------------------------------------------------
+// CoinGecko Free API fetcher
+// ---------------------------------------------------------------------------
+const COINGECKO_MARKETS =
+  "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=120&page=1&sparkline=true&price_change_percentage=24h"
+
+async function fetchMarkets(url: string): Promise<CoinData[]> {
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" },
+  })
+  if (!res.ok) throw new Error("CoinGecko API error")
+  return res.json()
+}
+
+// ---------------------------------------------------------------------------
+// Minion Guard SVG Component
+// ---------------------------------------------------------------------------
+function MinionGuard({ side, className = "" }: { side: "left" | "right"; className?: string }) {
+  const flip = side === "right"
+  return (
+    <div
+      className={`select-none ${className}`}
+      style={{ transform: flip ? "scaleX(-1)" : undefined }}
+    >
+      <svg width="64" height="80" viewBox="0 0 64 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+        {/* body */}
+        <ellipse cx="32" cy="48" rx="22" ry="28" fill="#F5D442" />
+        {/* overalls */}
+        <rect x="14" y="52" width="36" height="22" rx="6" fill="#5B7EC2" />
+        <rect x="22" y="46" width="20" height="14" rx="3" fill="#5B7EC2" />
+        {/* strap left */}
+        <line x1="22" y1="46" x2="18" y2="34" stroke="#5B7EC2" strokeWidth="3" strokeLinecap="round" />
+        {/* strap right */}
+        <line x1="42" y1="46" x2="46" y2="34" stroke="#5B7EC2" strokeWidth="3" strokeLinecap="round" />
+        {/* goggle band */}
+        <rect x="8" y="32" width="48" height="4" rx="2" fill="#8A8A8A" />
+        {/* goggle */}
+        <circle cx="32" cy="34" r="10" fill="#C0C0C0" stroke="#8A8A8A" strokeWidth="2" />
+        <circle cx="32" cy="34" r="7" fill="white" />
+        <circle cx="33" cy="33" r="4.5" fill="#6B4226" />
+        <circle cx="34" cy="32" r="2" fill="black" />
+        <circle cx="35.5" cy="30.5" r="1" fill="white" />
+        {/* mouth */}
+        <path d="M26 50 Q32 55 38 50" stroke="#333" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+        {/* arm holding shield */}
+        <ellipse cx="8" cy="48" rx="6" ry="4" fill="#F5D442" />
+        {/* shield */}
+        <path d="M2 38 L8 32 L14 38 L8 52 Z" fill="var(--primary)" opacity="0.9" />
+        <path d="M8 36 L8 46" stroke="var(--primary-foreground)" strokeWidth="1.5" strokeLinecap="round" />
+        <path d="M5 40 L11 40" stroke="var(--primary-foreground)" strokeWidth="1.5" strokeLinecap="round" />
+        {/* feet */}
+        <ellipse cx="24" cy="74" rx="6" ry="3" fill="#333" />
+        <ellipse cx="40" cy="74" rx="6" ry="3" fill="#333" />
+        {/* hair */}
+        <path d="M28 20 Q30 14 32 20" stroke="#333" strokeWidth="2" fill="none" strokeLinecap="round" />
+        <path d="M34 20 Q36 12 38 20" stroke="#333" strokeWidth="2" fill="none" strokeLinecap="round" />
+      </svg>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Animated floating minion pair
+// ---------------------------------------------------------------------------
+function GuardMinions() {
+  return (
+    <div className="flex items-center justify-center gap-2 my-4">
+      <div className="animate-bounce" style={{ animationDuration: "2.2s", animationDelay: "0s" }}>
+        <MinionGuard side="left" />
+      </div>
+      <div className="relative">
+        <div className="absolute inset-0 animate-ping rounded-full bg-primary/10" />
+        <div className="relative z-10 rounded-full border-2 border-primary/30 p-1">
+          <SecBadge size={56} className="ring-2 ring-primary/40" />
+        </div>
+      </div>
+      <div className="animate-bounce" style={{ animationDuration: "2.2s", animationDelay: "0.3s" }}>
+        <MinionGuard side="right" />
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Small inline minion for decor
+// ---------------------------------------------------------------------------
+function MiniMinion({ className = "" }: { className?: string }) {
+  return (
+    <svg width="24" height="30" viewBox="0 0 64 80" fill="none" className={className}>
+      <ellipse cx="32" cy="48" rx="22" ry="28" fill="#F5D442" />
+      <rect x="14" y="52" width="36" height="22" rx="6" fill="#5B7EC2" />
+      <rect x="22" y="46" width="20" height="14" rx="3" fill="#5B7EC2" />
+      <rect x="8" y="32" width="48" height="4" rx="2" fill="#8A8A8A" />
+      <circle cx="32" cy="34" r="10" fill="#C0C0C0" stroke="#8A8A8A" strokeWidth="2" />
+      <circle cx="32" cy="34" r="7" fill="white" />
+      <circle cx="33" cy="33" r="4.5" fill="#6B4226" />
+      <circle cx="34" cy="32" r="2" fill="black" />
+      <circle cx="35.5" cy="30.5" r="1" fill="white" />
+      <path d="M26 50 Q32 55 38 50" stroke="#333" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+      <ellipse cx="24" cy="74" rx="6" ry="3" fill="#333" />
+      <ellipse cx="40" cy="74" rx="6" ry="3" fill="#333" />
+    </svg>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Logo Badge Component
@@ -143,15 +282,31 @@ function SecBadge({ size = 32, className = "" }: { size?: number; className?: st
 }
 
 // ---------------------------------------------------------------------------
-// Animated Pulse Ring
+// Sparkline mini chart
 // ---------------------------------------------------------------------------
-function PulseRing({ children }: { children: React.ReactNode }) {
+function Sparkline({ data, positive }: { data: number[]; positive: boolean }) {
+  if (!data || data.length < 2) return null
+  const min = Math.min(...data)
+  const max = Math.max(...data)
+  const range = max - min || 1
+  const w = 60
+  const h = 20
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * w
+    const y = h - ((v - min) / range) * h
+    return `${x},${y}`
+  }).join(" ")
   return (
-    <div className="relative inline-flex items-center justify-center">
-      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/20" />
-      <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-primary/10" />
-      {children}
-    </div>
+    <svg width={w} height={h} className="shrink-0">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={positive ? "var(--primary)" : "var(--destructive)"}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   )
 }
 
@@ -168,9 +323,12 @@ export default function SecWalletApp() {
   const [gasPrice, setGasPrice] = useState("0")
   const [isLoading, setIsLoading] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [showMnemonic, setShowMnemonic] = useState(false)
-  const [showPrivateKey, setShowPrivateKey] = useState(false)
   const [activeTab, setActiveTab] = useState("wallet")
+  const [coinSearch, setCoinSearch] = useState("")
+
+  // Privacy: phrase & key only visible via Settings
+  const [settingsShowPhrase, setSettingsShowPhrase] = useState(false)
+  const [settingsShowKey, setSettingsShowKey] = useState(false)
 
   // Send form
   const [sendTo, setSendTo] = useState("")
@@ -192,6 +350,34 @@ export default function SecWalletApp() {
 
   const network = NETWORKS[networkKey]
   const providerRef = useRef<ethers.JsonRpcProvider | null>(null)
+
+  // -------------------------------------------------------------------------
+  // Fetch 120 coins from CoinGecko (free, no key)
+  // -------------------------------------------------------------------------
+  const { data: coins } = useSWR<CoinData[]>(
+    view === "dashboard" ? COINGECKO_MARKETS : null,
+    fetchMarkets,
+    { refreshInterval: 60000, revalidateOnFocus: false, dedupingInterval: 30000 }
+  )
+
+  const filteredCoins = useMemo(() => {
+    if (!coins) return []
+    if (!coinSearch.trim()) return coins
+    const q = coinSearch.toLowerCase()
+    return coins.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.symbol.toLowerCase().includes(q)
+    )
+  }, [coins, coinSearch])
+
+  // Compute USD value of current balance
+  const balanceUsd = useMemo(() => {
+    if (!coins) return null
+    const match = coins.find((c) => c.id === network.coingeckoId)
+    if (!match) return null
+    return parseFloat(balance) * match.current_price
+  }, [coins, balance, network.coingeckoId])
 
   // Get provider for current network
   const getProvider = useCallback(() => {
@@ -292,7 +478,6 @@ export default function SecWalletApp() {
       setWallet(w)
       setMnemonic(w.mnemonic!.phrase)
       sessionStorage.setItem("sec_mnemonic", w.mnemonic!.phrase)
-      setShowMnemonic(true)
       setIsLoading(false)
       setView("dashboard")
     }, 600)
@@ -324,9 +509,10 @@ export default function SecWalletApp() {
     setBalance("0")
     setTransactions([])
     setView("onboarding")
-    setShowMnemonic(false)
-    setShowPrivateKey(false)
+    setSettingsShowPhrase(false)
+    setSettingsShowKey(false)
     setActiveTab("wallet")
+    setShowSettings(false)
   }
 
   async function sendTransaction() {
@@ -361,7 +547,6 @@ export default function SecWalletApp() {
       setShowSend(false)
       setShowTxResult(true)
 
-      // Wait for confirmation
       const receipt = await tx.wait()
       setTransactions((prev) =>
         prev.map((t) =>
@@ -394,18 +579,17 @@ export default function SecWalletApp() {
     return (
       <main className="flex min-h-svh flex-col items-center justify-center bg-background p-4">
         <div className="w-full max-w-md">
-          {/* Logo & Title */}
-          <div className="mb-8 flex flex-col items-center gap-4 text-center animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <PulseRing>
-              <SecBadge size={80} className="ring-2 ring-primary/40" />
-            </PulseRing>
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight text-foreground">SecWallet</h1>
-              <p className="mt-1 text-sm text-muted-foreground">Secure. Lightweight. Yours.</p>
-            </div>
+          {/* Minion guards flanking logo */}
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <GuardMinions />
           </div>
 
-          <Tabs defaultValue="create" className="w-full animate-in fade-in slide-in-from-bottom-6 duration-700 delay-150">
+          <div className="mb-6 text-center animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100">
+            <h1 className="text-3xl font-bold tracking-tight text-foreground">SecWallet</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Guarded by minions. Secured by you.</p>
+          </div>
+
+          <Tabs defaultValue="create" className="w-full animate-in fade-in slide-in-from-bottom-6 duration-700 delay-200">
             <TabsList className="grid w-full grid-cols-2 h-11">
               <TabsTrigger value="create" className="gap-1.5 min-h-[44px]">
                 <Wallet className="size-4" />
@@ -424,8 +608,8 @@ export default function SecWalletApp() {
                   <h2 className="text-lg font-semibold text-card-foreground">New Wallet</h2>
                 </div>
                 <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
-                  Generate a brand new Ethereum wallet with a secure 12-word recovery phrase. Your keys
-                  never leave this device.
+                  Generate a brand new Ethereum wallet with a secure 12-word recovery phrase.
+                  Your keys never leave this device.
                 </p>
                 <Button
                   onClick={createWallet}
@@ -450,7 +634,7 @@ export default function SecWalletApp() {
                   <h2 className="text-lg font-semibold text-card-foreground">Recover Wallet</h2>
                 </div>
                 <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
-                  Enter your 12-word mnemonic phrase to restore access to your existing wallet.
+                  Enter your 12-word mnemonic phrase to restore access to your wallet.
                 </p>
                 <div className="space-y-4">
                   <div>
@@ -485,9 +669,10 @@ export default function SecWalletApp() {
             </TabsContent>
           </Tabs>
 
-          <p className="mt-6 text-center text-xs text-muted-foreground animate-in fade-in duration-1000 delay-300">
-            Client-side only. Keys never leave your browser.
-          </p>
+          <div className="mt-6 flex items-center justify-center gap-2 text-xs text-muted-foreground animate-in fade-in duration-1000 delay-300">
+            <Lock className="size-3" />
+            <span>Client-side only. Keys never leave your browser.</span>
+          </div>
         </div>
       </main>
     )
@@ -534,16 +719,16 @@ export default function SecWalletApp() {
         {/* Balance Card */}
         <div className="animate-in fade-in slide-in-from-bottom-3 duration-500 rounded-2xl border border-border bg-card p-5 mb-4">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Total Balance
-            </p>
+            <div className="flex items-center gap-2">
+              <MiniMinion className="opacity-70" />
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Total Balance
+              </p>
+            </div>
             <Button
               variant="ghost"
-              size="icon-sm"
-              onClick={() => {
-                fetchBalance()
-                fetchGas()
-              }}
+              size="icon"
+              onClick={() => { fetchBalance(); fetchGas() }}
               className="min-h-[44px] min-w-[44px]"
             >
               <RefreshCw className="size-3.5 text-muted-foreground" />
@@ -557,7 +742,13 @@ export default function SecWalletApp() {
             <span className="mb-1 text-sm font-medium text-primary">{network.symbol}</span>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-muted-foreground mt-2">
+          {balanceUsd !== null && (
+            <p className="text-sm text-muted-foreground mb-2">
+              {formatUsd(balanceUsd)} USD
+            </p>
+          )}
+
+          <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
             <div className="flex items-center gap-1">
               <Fuel className="size-3" />
               <span>{parseFloat(gasPrice).toFixed(1)} Gwei</span>
@@ -590,7 +781,7 @@ export default function SecWalletApp() {
           <Button
             onClick={() => setShowReceive(true)}
             variant="outline"
-            className="min-h-[52px] rounded-xl text-sm font-semibold"
+            className="min-h-[52px] rounded-xl text-sm font-semibold border-border text-foreground"
             size="lg"
           >
             <ArrowDownLeft className="size-4" />
@@ -598,70 +789,134 @@ export default function SecWalletApp() {
           </Button>
         </div>
 
-        {/* Mnemonic Backup Banner */}
-        {showMnemonic && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 delay-200 mb-6 rounded-xl border border-primary/30 bg-primary/5 p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <AlertTriangle className="size-4 text-primary" />
-              <h3 className="text-sm font-semibold text-foreground">
-                Back up your recovery phrase
-              </h3>
-            </div>
-            <div className="grid grid-cols-3 gap-2 mb-3">
-              {mnemonic.split(" ").map((word, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-1.5 rounded-lg bg-secondary px-2.5 py-1.5"
-                >
-                  <span className="text-[10px] text-muted-foreground">{i + 1}</span>
-                  <span className="font-mono text-xs text-foreground">{word}</span>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  copyText(mnemonic)
-                }}
-                className="min-h-[44px]"
-              >
-                <Copy className="size-3.5" />
-                Copy
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowMnemonic(false)}
-                className="text-muted-foreground min-h-[44px]"
-              >
-                I saved it
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Tabs: Activity / Info */}
+        {/* Tabs: Wallet / Markets / Activity */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="w-full h-11">
             <TabsTrigger value="wallet" className="flex-1 min-h-[44px]">Wallet</TabsTrigger>
+            <TabsTrigger value="markets" className="flex-1 min-h-[44px]">
+              <Coins className="size-3.5 mr-1" />
+              Markets
+            </TabsTrigger>
             <TabsTrigger value="activity" className="flex-1 min-h-[44px]">Activity</TabsTrigger>
           </TabsList>
 
+          {/* ---- Wallet Tab ---- */}
           <TabsContent value="wallet" className="mt-4 space-y-3 animate-in fade-in duration-300">
-            {/* Wallet Info Cards */}
             <InfoRow label="Address" value={wallet?.address ?? ""} mono copyable />
             <InfoRow label="Network" value={network.name} />
             <InfoRow label="Chain ID" value={String(network.chainId)} />
             <InfoRow label="Symbol" value={network.symbol} />
             <InfoRow
               label="Explorer"
-              value={network.explorer}
+              value={network.explorer.replace("https://", "")}
               link={`${network.explorer}/address/${wallet?.address}`}
             />
+
+            {/* Security status */}
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 mt-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex items-center justify-center size-10 rounded-full bg-primary/10">
+                  <ShieldCheck className="size-5 text-primary" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Wallet Secured</p>
+                  <p className="text-xs text-muted-foreground">Your keys are guarded locally</p>
+                </div>
+                <MiniMinion className="ml-auto opacity-60" />
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <Fingerprint className="size-3 text-primary" />
+                  Client-side keys
+                </div>
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <Lock className="size-3 text-primary" />
+                  Session encrypted
+                </div>
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <Shield className="size-3 text-primary" />
+                  No server storage
+                </div>
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <KeyRound className="size-3 text-primary" />
+                  Keys in Settings
+                </div>
+              </div>
+            </div>
           </TabsContent>
 
+          {/* ---- Markets Tab (100+ coins) ---- */}
+          <TabsContent value="markets" className="mt-4 animate-in fade-in duration-300">
+            {/* Search */}
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+              <Input
+                placeholder="Search 120+ tokens..."
+                value={coinSearch}
+                onChange={(e) => setCoinSearch(e.target.value)}
+                className="pl-9 min-h-[44px]"
+              />
+            </div>
+
+            {!coins ? (
+              <div className="flex flex-col items-center py-12 text-muted-foreground">
+                <RefreshCw className="size-6 animate-spin mb-3 opacity-40" />
+                <p className="text-sm">Loading live prices...</p>
+              </div>
+            ) : filteredCoins.length === 0 ? (
+              <div className="flex flex-col items-center py-12 text-muted-foreground">
+                <Search className="size-8 mb-3 opacity-30" />
+                <p className="text-sm">No tokens found</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {filteredCoins.map((coin) => {
+                  const positive = coin.price_change_percentage_24h >= 0
+                  return (
+                    <div
+                      key={coin.id}
+                      className="flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-2.5 transition-colors hover:bg-secondary"
+                    >
+                      <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                        <span className="text-[10px] text-muted-foreground w-5 text-right shrink-0">
+                          {coin.market_cap_rank}
+                        </span>
+                        <Image
+                          src={coin.image}
+                          alt={coin.name}
+                          width={28}
+                          height={28}
+                          className="rounded-full shrink-0"
+                          crossOrigin="anonymous"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">{coin.name}</p>
+                          <p className="text-[10px] text-muted-foreground uppercase">{coin.symbol}</p>
+                        </div>
+                      </div>
+                      <Sparkline
+                        data={coin.sparkline_in_7d?.price ?? []}
+                        positive={positive}
+                      />
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-semibold text-foreground tabular-nums">
+                          {formatUsd(coin.current_price)}
+                        </p>
+                        <p className={`text-[10px] font-medium tabular-nums flex items-center justify-end gap-0.5 ${
+                          positive ? "text-primary" : "text-destructive"
+                        }`}>
+                          {positive ? <TrendingUp className="size-2.5" /> : <TrendingDown className="size-2.5" />}
+                          {Math.abs(coin.price_change_percentage_24h).toFixed(2)}%
+                        </p>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ---- Activity Tab ---- */}
           <TabsContent value="activity" className="mt-4 animate-in fade-in duration-300">
             {transactions.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
@@ -703,10 +958,10 @@ export default function SecWalletApp() {
           <span className="text-[10px] mt-1 text-primary font-medium">Receive</span>
         </button>
         <NavButton
-          icon={<Clock className="size-5" />}
-          label="Activity"
-          active={activeTab === "activity"}
-          onClick={() => setActiveTab("activity")}
+          icon={<Coins className="size-5" />}
+          label="Markets"
+          active={activeTab === "markets"}
+          onClick={() => setActiveTab("markets")}
         />
         <NavButton
           icon={<Settings className="size-5" />}
@@ -751,7 +1006,7 @@ export default function SecWalletApp() {
                 className="mt-1.5 font-mono text-sm"
               />
               <button
-                onClick={() => setBalance((b) => { setSendAmount(b); return b })}
+                onClick={() => setSendAmount(balance)}
                 className="mt-1 text-xs text-primary hover:underline min-h-[44px] px-1"
               >
                 Max: {parseFloat(balance).toFixed(6)} {network.symbol}
@@ -874,17 +1129,37 @@ export default function SecWalletApp() {
         </DialogContent>
       </Dialog>
 
-      {/* ===== SETTINGS DIALOG ===== */}
-      <Dialog open={showSettings} onOpenChange={setShowSettings}>
-        <DialogContent className="max-w-md">
+      {/* ===== SETTINGS DIALOG (phrase + key access) ===== */}
+      <Dialog open={showSettings} onOpenChange={(open) => {
+        setShowSettings(open)
+        if (!open) {
+          setSettingsShowPhrase(false)
+          setSettingsShowKey(false)
+        }
+      }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center gap-2">
               <SecBadge size={24} />
-              <DialogTitle>Wallet Settings</DialogTitle>
+              <DialogTitle>Settings & Security</DialogTitle>
             </div>
-            <DialogDescription>Manage your wallet and security</DialogDescription>
+            <DialogDescription>Manage your wallet, keys, and privacy</DialogDescription>
           </DialogHeader>
+
           <div className="space-y-4">
+            {/* Minion guard banner */}
+            <div className="flex items-center justify-center gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3">
+              <div className="animate-bounce" style={{ animationDuration: "2s" }}>
+                <MiniMinion />
+              </div>
+              <p className="text-xs text-muted-foreground text-center flex-1">
+                Your secrets are guarded. Only reveal them in a safe environment.
+              </p>
+              <div className="animate-bounce" style={{ animationDuration: "2s", animationDelay: "0.4s" }}>
+                <MiniMinion />
+              </div>
+            </div>
+
             {/* Recovery Phrase */}
             <div className="rounded-xl border border-border bg-secondary p-4">
               <div className="flex items-center justify-between mb-2">
@@ -895,21 +1170,34 @@ export default function SecWalletApp() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setShowMnemonic(!showMnemonic)}
+                  onClick={() => setSettingsShowPhrase(!settingsShowPhrase)}
                   className="min-h-[44px]"
                 >
-                  {showMnemonic ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                  {settingsShowPhrase ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                 </Button>
               </div>
-              {showMnemonic && (
+              {!settingsShowPhrase ? (
+                <div className="flex items-center gap-2 rounded-lg bg-background/50 p-3">
+                  <Lock className="size-4 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">
+                    Tap the eye icon to reveal your 12-word phrase
+                  </span>
+                </div>
+              ) : (
                 <div className="animate-in fade-in duration-200">
-                  <div className="grid grid-cols-3 gap-1.5 mb-2">
+                  <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-2 mb-3">
+                    <p className="text-[10px] text-destructive flex items-center gap-1">
+                      <AlertTriangle className="size-3" />
+                      Never share your phrase. Anyone with it can access your funds.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5 mb-3">
                     {mnemonic.split(" ").map((word, i) => (
                       <div
                         key={i}
-                        className="flex items-center gap-1 rounded bg-background px-2 py-1"
+                        className="flex items-center gap-1 rounded bg-background px-2 py-1.5"
                       >
-                        <span className="text-[10px] text-muted-foreground">{i + 1}</span>
+                        <span className="text-[10px] text-muted-foreground w-3 text-right">{i + 1}</span>
                         <span className="font-mono text-[11px] text-foreground">{word}</span>
                       </div>
                     ))}
@@ -937,14 +1225,27 @@ export default function SecWalletApp() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setShowPrivateKey(!showPrivateKey)}
+                  onClick={() => setSettingsShowKey(!settingsShowKey)}
                   className="min-h-[44px]"
                 >
-                  {showPrivateKey ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                  {settingsShowKey ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
                 </Button>
               </div>
-              {showPrivateKey && wallet && (
+              {!settingsShowKey ? (
+                <div className="flex items-center gap-2 rounded-lg bg-background/50 p-3">
+                  <Lock className="size-4 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">
+                    Tap the eye icon to reveal your private key
+                  </span>
+                </div>
+              ) : wallet && (
                 <div className="animate-in fade-in duration-200">
+                  <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-2 mb-3">
+                    <p className="text-[10px] text-destructive flex items-center gap-1">
+                      <AlertTriangle className="size-3" />
+                      Never share your private key. It gives full access to your wallet.
+                    </p>
+                  </div>
                   <p className="break-all rounded bg-background p-2 font-mono text-[11px] text-foreground mb-2">
                     {wallet.privateKey}
                   </p>
@@ -980,8 +1281,35 @@ export default function SecWalletApp() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Privacy Info */}
+            <div className="rounded-xl border border-border bg-secondary p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Fingerprint className="size-4 text-primary" />
+                <span className="text-sm font-medium text-foreground">Privacy</span>
+              </div>
+              <div className="space-y-2 text-xs text-muted-foreground">
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="size-3.5 text-primary mt-0.5 shrink-0" />
+                  <span>Keys stored in session memory only, cleared on lock</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="size-3.5 text-primary mt-0.5 shrink-0" />
+                  <span>No server communication for key material</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="size-3.5 text-primary mt-0.5 shrink-0" />
+                  <span>Recovery phrase hidden by default everywhere</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="size-3.5 text-primary mt-0.5 shrink-0" />
+                  <span>All RPC calls are read-only except signed transactions</span>
+                </div>
+              </div>
+            </div>
           </div>
-          <DialogFooter>
+
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
             <Button variant="destructive" onClick={lockWallet} className="w-full min-h-[44px]">
               <LogOut className="size-4" />
               Lock & Clear Wallet
