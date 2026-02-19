@@ -102,6 +102,6 @@ Contact
 
 For inquiries, feature requests, or collaboration, open an issue or contact the maintainers.
 
-SecWallet – A trust-first, high-integrity wallet for Secoin, combining security, transparency, and sustainable wealth preservation in a single, auditable platform.
+⸻
 
----
+SecWallet – A trust-first, high-integrity wallet for Secoin, combining security, transparency, and sustainable wealth preservation in a single, auditable platform.
