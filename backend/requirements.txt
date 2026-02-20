@@ -1,0 +1,8 @@
+
+fastapi
+uvicorn
+web3
+sqlalchemy
+psycopg2-binary
+python-jose
+passlib[bcrypt]
