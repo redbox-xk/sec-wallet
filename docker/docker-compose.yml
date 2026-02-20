@@ -1,0 +1,15 @@
+
+version: '3.9'
+services:
+  backend:
+    build: ./docker
+    ports:
+      - "8000:8000"
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: sec
+      POSTGRES_PASSWORD: securepass
+      POSTGRES_DB: sec_exchange
+    ports:
+      - "5432:5432"
